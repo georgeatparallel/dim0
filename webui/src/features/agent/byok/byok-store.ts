@@ -5,8 +5,8 @@ import type { ByokConfig, ByokProvider } from "@/features/agent/engine/byok-clie
 const STORAGE_KEY = "dim0.byok"
 
 
-/** Web-search providers a user can bring a key for (relayed through our proxy). */
-export type SearchEngine = "perplexity" | "tavily" | "linkup" | "exa"
+/** Web-search providers, including the explicitly selected keyless Parallel option. */
+export type SearchEngine = "perplexity" | "tavily" | "linkup" | "exa" | "parallel"
 
 
 /** A model provider's own BYOK credential. */
@@ -164,6 +164,7 @@ export const useByokStore = create<ByokState>((set, get) => ({
 
   searchByok: () => {
     const { searchEngine, search } = get()
+    if (searchEngine === "parallel") return null
     const apiKey = search[searchEngine]
     return apiKey?.trim() ? { engine: searchEngine, apiKey: apiKey.trim() } : null
   },
@@ -185,7 +186,7 @@ const hasAnyKey = (s: ByokState): boolean =>
 function persist(get: () => ByokState): void {
   const { provider, llm, searchEngine, search, codeKey, parseKey } = get()
   try {
-    if (hasAnyKey(get())) {
+    if (hasAnyKey(get()) || searchEngine === "parallel") {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ provider, llm, searchEngine, search, codeKey, parseKey }))
     } else {
       localStorage.removeItem(STORAGE_KEY)

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import topix.api.router.ai as ai_module
 
-from topix.api.router.ai import meter_run, router
+from topix.api.router.ai import meter_search, router
 from topix.api.utils.security import get_current_user_uid
 
 
@@ -20,6 +20,7 @@ async def _no_meter() -> None:
 
 
 def _client() -> TestClient:
+    """Isolate search dispatch from the endpoint-specific quota dependency."""
     app = FastAPI()
     app.include_router(router)
 
@@ -27,7 +28,7 @@ def _client() -> TestClient:
         return "user-1"
 
     app.dependency_overrides[get_current_user_uid] = _uid
-    app.dependency_overrides[meter_run] = _no_meter
+    app.dependency_overrides[meter_search] = _no_meter
     return TestClient(app)
 
 

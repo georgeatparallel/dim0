@@ -66,3 +66,13 @@ that idempotent under retries and parallel tool calls.
 ## Verify
 `grep -rn "preferManaged\|managedAllowed\|byok" webui/src/features/agent/engine/services/resolve.ts` — the precedence matrix lives in one pure function.
 `grep -rn "X-Run-Id\|set_if_absent\|_meter_run\|meter_run_managed" backend/topix/api/router/ai.py` — run-id dedup + the two metering deps (only `meter_run` has the `X-Provider-Key` escape hatch).
+
+## Optional keyless search
+
+An explicit `parallel` search selection resolves to `keyless` before the existing
+BYOK/managed/off precedence. It uses `/ai/search` without a provider key or a
+managed quota charge, guarded by the relay's per-IP limit and Parallel's anonymous
+limits. Other services and search selections retain their existing precedence.
+The backend owns a dedicated anonymous Streamable HTTP MCP client. It does not
+reuse saved credentials or the shared keyed HTTP client. Desktop also uses the
+relay for this option; desktop-direct Parallel search is not implemented.

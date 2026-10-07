@@ -66,7 +66,9 @@ class WebSearchConfig(BaseAgentConfig):
     @field_validator("search_engine")
     @classmethod
     def validate_engine(cls, v: str) -> str:
-        """Check if the model is valid."""
+        """Resolve a configured engine, allowing explicit anonymous Parallel search."""
+        if v == WebSearchOption.PARALLEL:
+            return v
         valid_engines = [service.name for service in service_config.search]
         if len(valid_engines) == 0:
             raise ValueError("No Search API available. Please add at least one Search API.")

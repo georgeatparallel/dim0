@@ -6,7 +6,8 @@
  * through `/ai/search`. "Our keys first, yours as fallback": a signed-in user
  * hits our proxy with our keys; if that's over quota (429) and the user has a
  * BYOK search key, the same call is retried with `X-Provider-Key` (relayed,
- * not stored). Signed-out has no authed proxy → off.
+ * not stored). Explicit Parallel search is keyless and uses the same relay
+ * without sign-in or a provider key. Other signed-out selections need BYOK.
  */
 import { z } from "zod"
 import { defineTool, type AgentEvent, type Tool } from "./types"
@@ -70,10 +71,14 @@ export const resolveSearchClient = (opts: {
   const cred = opts.byok?.apiKey ? { provider: opts.byok.engine, apiKey: opts.byok.apiKey } : undefined
   const resolution = resolveService("search", {
     signedIn: opts.signedIn,
+    searchEngine: opts.engine,
     preferManaged: opts.signedIn,
     byok: cred ? { search: cred } : {},
   })
   if (resolution.mode === "off") return null
+  if (resolution.mode === "keyless") {
+    return managedSearchClient({ runId: opts.runId, engine: resolution.provider })
+  }
   // Desktop BYOK: reach the provider directly (CORS-free) instead of our proxy,
   // so search works offline-of-our-servers. Unported engines keep the /ai/search
   // path (online). In the browser this is always null → unchanged behaviour.

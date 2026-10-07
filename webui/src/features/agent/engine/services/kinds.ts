@@ -6,6 +6,7 @@
  * resolved (per request) to a `ServiceMode`:
  *   - "byok"    → call the provider directly with the USER's key,
  *   - "managed" → call our server proxy, which forwards with OUR keys (metered),
+ *   - "keyless" → explicitly selected anonymous Parallel search via our relay,
  *   - "off"     → unavailable (the corresponding tool is hidden).
  *
  * This module is pure types + constants — no React, no network — so the
@@ -18,7 +19,7 @@ export type ServiceKind = "llm" | "search" | "code" | "fetch" | "parse"
 export const SERVICE_KINDS: readonly ServiceKind[] = ["llm", "search", "code", "fetch", "parse"]
 
 
-export type ServiceMode = "byok" | "managed" | "off"
+export type ServiceMode = "byok" | "managed" | "keyless" | "off"
 
 
 /**
@@ -40,6 +41,7 @@ export type PerKindByok = Partial<Record<ServiceKind, ByokCredential>>
 export type ServiceResolution =
   | { kind: ServiceKind; mode: "byok"; credential: ByokCredential }
   | { kind: ServiceKind; mode: "managed"; provider?: string; model?: string }
+  | { kind: "search"; mode: "keyless"; provider: "parallel" }
   | { kind: ServiceKind; mode: "off" }
 
 
@@ -51,6 +53,8 @@ export type ServiceResolution =
  */
 export type ResolveContext = {
   signedIn: boolean
+  /** Explicit keyless search selection, independent of keys and sign-in. */
+  searchEngine?: string
   byok: PerKindByok
   managedAllowed?: (kind: ServiceKind) => boolean
   preferManaged?: boolean

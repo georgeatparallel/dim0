@@ -2,7 +2,8 @@
  * Pure service resolution (G1): decide per kind whether to use the user's key
  * (byok), our metered proxy (managed), or nothing (off).
  *
- * Precedence:
+ * An explicit Parallel search selection resolves keyless before this matrix.
+ * Precedence for other selections:
  *   1. preferManaged + managed available → managed (opt-in metering),
  *   2. a usable BYOK key present         → byok (BYOK wins by default; a
  *      configured key is never silently metered),
@@ -35,6 +36,9 @@ export const resolveService = (
   kind: ServiceKind,
   ctx: ResolveContext,
 ): ServiceResolution => {
+  if (kind === "search" && ctx.searchEngine === "parallel") {
+    return { kind: "search", mode: "keyless", provider: "parallel" }
+  }
   const byokReady = hasUsableKey(ctx, kind)
   const managedReady = managedAvailable(ctx, kind)
   const cred = ctx.byok[kind]

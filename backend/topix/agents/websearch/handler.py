@@ -11,6 +11,7 @@ from topix.agents.datatypes.tools import AgentToolName
 from topix.agents.datatypes.web_search import WebSearchContextSize, WebSearchOption
 from topix.agents.tool_handler import ToolHandler
 from topix.agents.websearch.openai import OpenAIWebSearch
+from topix.agents.websearch.parallel import search_parallel
 from topix.agents.websearch.tools import search_exa, search_linkup, search_perplexity, search_tavily
 from topix.agents.websearch.web_summarize import WebSummarize
 from topix.datatypes.recurrence import Recurrence
@@ -44,11 +45,13 @@ class WebSearchHandler:
                 streamed=config.streamed,
             )
         else:
-            web_summarizer = WebSummarize(
-                model=config.model,
-                instructions_template=config.instructions_template,
-                model_settings=config.model_settings,
-            )
+            web_summarizer = None
+            if config.enable_summary:
+                web_summarizer = WebSummarize(
+                    model=config.model,
+                    instructions_template=config.instructions_template,
+                    model_settings=config.model_settings,
+                )
             return cls.get_web_tool(
                 search_engine=config.search_engine,
                 search_context_size=config.search_context_size,
@@ -106,6 +109,10 @@ class WebSearchHandler:
             wrapper: RunContextWrapper[Context],
             query: str,
         ) -> WebSearchOutput:
+            if search_engine == WebSearchOption.PARALLEL:
+                return await search_parallel(
+                    query, max_results, search_context_size, recency, timeout=timeout,
+                )
             match search_engine:
                 case WebSearchOption.TAVILY:
                     search_func = search_tavily

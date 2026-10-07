@@ -38,6 +38,7 @@ const SEARCH_ENGINES: { id: SearchEngine; label: string; placeholder: string }[]
   { id: "tavily", label: "Tavily", placeholder: "tvly-…" },
   { id: "linkup", label: "Linkup", placeholder: "lk-…" },
   { id: "exa", label: "Exa", placeholder: "exa-…" },
+  { id: "parallel", label: "Parallel (keyless)", placeholder: "" },
 ]
 
 const fieldClass =
@@ -70,6 +71,7 @@ export function SettingsDialog({ trigger }: { trigger: React.ReactNode }) {
   const configured = useByokStore((s) => s.configured)
   const asConfig = useByokStore((s) => s.asConfig)
   const searchByok = useByokStore((s) => s.searchByok)
+  const searchEngine = useByokStore((s) => s.searchEngine)
   const codeByok = useByokStore((s) => s.codeByok)
   const parseByok = useByokStore((s) => s.parseByok)
   const resolutions = resolveAllServices(
@@ -77,6 +79,7 @@ export function SettingsDialog({ trigger }: { trigger: React.ReactNode }) {
       signedIn,
       llm: configured ? asConfig() : null,
       search: searchByok(),
+      searchEngine,
       code: codeByok(),
       parse: parseByok(),
     }),
@@ -182,6 +185,7 @@ function GeneralPane({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
   const configured = useByokStore((s) => s.configured)
   const asConfig = useByokStore((s) => s.asConfig)
   const searchByok = useByokStore((s) => s.searchByok)
+  const searchEngine = useByokStore((s) => s.searchEngine)
   const codeByok = useByokStore((s) => s.codeByok)
   const parseByok = useByokStore((s) => s.parseByok)
   const resolutions = resolveAllServices(
@@ -189,6 +193,7 @@ function GeneralPane({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
       signedIn,
       llm: configured ? asConfig() : null,
       search: searchByok(),
+      searchEngine,
       code: codeByok(),
       parse: parseByok(),
     }),
@@ -239,7 +244,9 @@ function GeneralPane({ onNavigate }: { onNavigate: (s: SectionId) => void }) {
                 <Icon className="size-4 shrink-0 text-muted-foreground" />
                 {label}
               </span>
-              {mode === "managed" ? (
+              {mode === "keyless" ? (
+                <Chip tone="byok" label="No key needed" />
+              ) : mode === "managed" ? (
                 <Chip tone="managed" label="Our keys" />
               ) : mode === "byok" ? (
                 <Chip tone="byok" label="Your key" />
@@ -332,7 +339,7 @@ function SearchPane() {
 
   const managedAvailable = (id: SearchEngine): boolean =>
     signedIn && (managed.find((s) => s.name === id)?.available ?? false)
-  const usable = (id: SearchEngine): boolean => managedAvailable(id) || !!keys[id]
+  const usable = (id: SearchEngine): boolean => id === "parallel" || managedAvailable(id) || !!keys[id]
 
   return (
     <div>
@@ -377,17 +384,26 @@ function SearchPane() {
         })}
       </div>
 
-      <label className="mb-1 block text-xs font-medium text-muted-foreground">Your {active.label} key</label>
-      <div className="flex gap-2">
-        <input
-          type="password"
-          value={key}
-          onChange={(ev) => setKey(ev.target.value)}
-          placeholder={active.placeholder}
-          className={fieldClass}
-        />
-        <SaveButton disabled={key === (keys[engine] ?? "")} onClick={() => setSearchKey(engine, key.trim())} />
-      </div>
+      {engine === "parallel" ? (
+        <p className="text-xs text-muted-foreground">
+          Free for light use, with rate limits. No search API key needed. Requires a reachable Dim0 backend;
+          model inference is configured separately.
+        </p>
+      ) : (
+        <>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">Your {active.label} key</label>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={key}
+              onChange={(ev) => setKey(ev.target.value)}
+              placeholder={active.placeholder}
+              className={fieldClass}
+            />
+            <SaveButton disabled={key === (keys[engine] ?? "")} onClick={() => setSearchKey(engine, key.trim())} />
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -13,6 +13,7 @@ import type { ByokCredential, PerKindByok, ResolveContext } from "./kinds"
 
 export const agentResolveContext = (opts: {
   signedIn: boolean
+  searchEngine?: string
   llm?: ByokConfig | null
   search?: { engine: string; apiKey: string } | null
   code?: string | null
@@ -31,5 +32,5 @@ export const agentResolveContext = (opts: {
   if (opts.parse) {
     byok.parse = { provider: "mistral", apiKey: opts.parse }
   }
-  return { signedIn: opts.signedIn, preferManaged: opts.signedIn, byok }
+  return { signedIn: opts.signedIn, preferManaged: opts.signedIn, searchEngine: opts.searchEngine, byok }
 }

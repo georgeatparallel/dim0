@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Iterator
 from typing import Annotated, Any, Literal
 
+import httpx
 import litellm
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Response, UploadFile, status
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 
 from topix.agents.assistant.auto_model import classify_auto_model_complexity
 from topix.agents.assistant.code import execute_code
+from topix.agents.websearch.parallel import search_parallel
 from topix.agents.websearch.tools import (
     fetch_content,
     search_exa,
@@ -388,11 +390,31 @@ _SEARCH_FNS = {
 
 
 class AiSearchRequest(BaseModel):
-    """A managed web search: a query + which engine (our keys)."""
+    """A web search query and engine; Parallel uses anonymous MCP."""
 
     query: str
     engine: str = "perplexity"
     max_results: int = 10
+
+
+async def meter_search(
+    request: Request,
+    body: "AiSearchRequest",
+    user_id: Annotated[str | None, Depends(optional_user_uid)] = None,
+    x_run_id: Annotated[str | None, Header()] = None,
+    x_provider_key: Annotated[str | None, Header()] = None,
+) -> None:
+    """Guard keyless search by IP; retain existing metering for other engines."""
+    if body.engine == "parallel":
+        redis = getattr(request.app, "redis_store", None)
+        if redis is not None:
+            ok, _ = await redis.check_fixed_window_quota(
+                _client_ip(request), BYOK_IP_PER_MINUTE, "minute", scope="keyless_search"
+            )
+            if not ok:
+                raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Slow down")
+        return
+    await _meter_run(request, user_id, x_run_id, x_provider_key, allow_byok_relay=True)
 
 
 @router.post("/search/", include_in_schema=False)
@@ -403,20 +425,36 @@ async def ai_search(
     request: Request,
     body: AiSearchRequest,
     user_id: Annotated[str | None, Depends(optional_user_uid)],
-    _meter: Annotated[None, Depends(meter_run)],
+    _meter: Annotated[None, Depends(meter_search)],
     x_provider_key: Annotated[str | None, Header()] = None,
+    x_run_id: Annotated[str | None, Header()] = None,
 ):
     """Run one web search; returns `{answer, results}`.
 
     Uses our provider key by default, or relays the user's `X-Provider-Key`
-    (BYOK) for this call only — never stored.
+    (BYOK) for this call only — never stored. Parallel uses a dedicated
+    anonymous MCP connection and ignores provider keys.
     """
-    fn = _SEARCH_FNS.get(body.engine)
-    if fn is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, f"Unsupported search engine '{body.engine}'"
-        )
-    output = await fn(body.query, max_results=body.max_results, api_key=x_provider_key)
+    if body.engine == "parallel":
+        if not body.query.strip() or body.max_results < 1:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Query and positive max_results are required")
+        try:
+            output = await search_parallel(body.query, max_results=body.max_results, session_id=x_run_id)
+        except httpx.HTTPStatusError as error:
+            code = error.response.status_code
+            retry_after = error.response.headers.get("Retry-After")
+            if retry_after:
+                response.headers["Retry-After"] = retry_after
+            raise HTTPException(code if code == 429 else 502, f"Parallel search failed (HTTP {code})") from error
+        except httpx.TimeoutException as error:
+            raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Parallel search timed out") from error
+    else:
+        fn = _SEARCH_FNS.get(body.engine)
+        if fn is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"Unsupported search engine '{body.engine}'"
+            )
+        output = await fn(body.query, max_results=body.max_results, api_key=x_provider_key)
     return {
         "answer": output.answer,
         "results": [
