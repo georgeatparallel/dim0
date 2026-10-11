@@ -2,7 +2,9 @@
  * Pure service resolution (G1): decide per kind whether to use the user's key
  * (byok), our metered proxy (managed), or nothing (off).
  *
- * An explicit Parallel search selection resolves keyless before this matrix.
+ * An explicitly selected keyless search engine resolves before this matrix —
+ * but only while the network is reachable, so it goes `off` (and `web_search`
+ * is hidden) offline, exactly like the engines that need a key or our server.
  * Precedence for other selections:
  *   1. preferManaged + managed available → managed (opt-in metering),
  *   2. a usable BYOK key present         → byok (BYOK wins by default; a
@@ -18,7 +20,7 @@ import type {
   ServiceKind,
   ServiceResolution,
 } from "./kinds"
-import { SERVICE_KINDS } from "./kinds"
+import { isKeylessSearchEngine, SERVICE_KINDS } from "./kinds"
 
 
 const hasUsableKey = (ctx: ResolveContext, kind: ServiceKind): boolean => {
@@ -36,8 +38,10 @@ export const resolveService = (
   kind: ServiceKind,
   ctx: ResolveContext,
 ): ServiceResolution => {
-  if (kind === "search" && ctx.searchEngine === "parallel") {
-    return { kind: "search", mode: "keyless", provider: "parallel" }
+  if (kind === "search" && isKeylessSearchEngine(ctx.searchEngine)) {
+    return ctx.online === false
+      ? { kind, mode: "off" }
+      : { kind: "search", mode: "keyless", provider: ctx.searchEngine }
   }
   const byokReady = hasUsableKey(ctx, kind)
   const managedReady = managedAvailable(ctx, kind)

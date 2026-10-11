@@ -11,9 +11,16 @@ import type { ByokConfig } from "../byok-client"
 import type { ByokCredential, PerKindByok, ResolveContext } from "./kinds"
 
 
+/** Best-effort "is the network up", the only thing a keyless engine needs. */
+export const isOnline = (): boolean =>
+  typeof navigator === "undefined" || navigator.onLine !== false
+
+
 export const agentResolveContext = (opts: {
   signedIn: boolean
   searchEngine?: string
+  /** Defaults to the live `navigator.onLine`; pass it explicitly in tests. */
+  online?: boolean
   llm?: ByokConfig | null
   search?: { engine: string; apiKey: string } | null
   code?: string | null
@@ -32,5 +39,11 @@ export const agentResolveContext = (opts: {
   if (opts.parse) {
     byok.parse = { provider: "mistral", apiKey: opts.parse }
   }
-  return { signedIn: opts.signedIn, preferManaged: opts.signedIn, searchEngine: opts.searchEngine, byok }
+  return {
+    signedIn: opts.signedIn,
+    preferManaged: opts.signedIn,
+    searchEngine: opts.searchEngine,
+    online: opts.online ?? isOnline(),
+    byok,
+  }
 }

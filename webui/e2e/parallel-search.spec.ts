@@ -11,18 +11,34 @@ const turn = (delta: object, finish: string): string => {
 }
 
 
-test("select keyless Parallel in settings and search through the browser agent", async ({ page }) => {
-  const source = { url: "https://docs.python.org/3/library/asyncio.html", title: "asyncio", content: "Python asynchronous I/O" }
+test("select keyless Parallel in settings and search Parallel directly from the browser", async ({ page }) => {
+  const source = { url: "https://docs.python.org/3/library/asyncio.html", title: "asyncio", excerpts: ["Python asynchronous I/O"] }
   let searched = false
+  let relayed = false
   let resultReceived = false
   let emitted = false
+  // The keyless path goes browser → Parallel. `/ai/search` is only the fallback,
+  // so a healthy direct call must never reach it.
   await page.route("**/ai/search", async (route) => {
+    relayed = true
+    await route.fulfill({ json: { status: "success", data: { answer: "", results: [] } } })
+  })
+  await page.route("https://search.parallel.ai/mcp", async (route) => {
     const request = route.request()
-    expect(request.postDataJSON()).toEqual({ engine: "parallel", query: "Python asyncio documentation" })
-    expect(request.headers()["x-provider-key"]).toBeUndefined()
-    expect(request.headers()["x-run-id"]).toBeTruthy()
+    const body = request.postDataJSON()
+    expect(body.method).toBe("tools/call")
+    expect(body.params).toEqual({
+      name: "web_search",
+      arguments: { objective: "Python asyncio documentation", search_queries: ["Python asyncio documentation"] },
+    })
+    for (const header of ["authorization", "cookie", "x-api-key", "x-provider-key", "x-run-id"]) {
+      expect(request.headers()[header]).toBeUndefined()
+    }
     searched = true
-    await route.fulfill({ json: { status: "success", data: { answer: "", results: [source] } } })
+    await route.fulfill({ json: {
+      jsonrpc: "2.0", id: body.id,
+      result: { content: [{ type: "text", text: JSON.stringify({ results: [source] }) }], structuredContent: { results: [source] } },
+    } })
   })
   await page.route("**/chat/completions", async (route) => {
     const body = route.request().postDataJSON()
@@ -49,7 +65,7 @@ test("select keyless Parallel in settings and search through the browser agent",
   await page.getByRole("button", { name: "Save" }).click()
   await page.getByRole("button", { name: /^Web search/ }).click()
   await page.getByRole("button", { name: "Parallel (keyless)" }).click()
-  await expect(page.getByText(/No search API key needed/)).toBeVisible()
+  await expect(page.getByText(/No search API key and no sign-in needed/)).toBeVisible()
   await page.getByRole("switch", { name: "Always allow web search", exact: true }).click()
   await page.keyboard.press("Escape")
   await page.reload()
@@ -60,5 +76,6 @@ test("select keyless Parallel in settings and search through the browser agent",
   await page.getByPlaceholder(/Ask about this board/).press("Enter")
   await expect(page.getByText("Found asyncio documentation.")).toBeVisible()
   expect(searched).toBe(true)
+  expect(relayed).toBe(false)
   expect(resultReceived).toBe(true)
 })

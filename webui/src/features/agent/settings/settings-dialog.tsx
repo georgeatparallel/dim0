@@ -18,9 +18,9 @@ import { ModelChoiceMenu } from "@/features/agent/components/chat/input-settings
 import { useChatStore } from "@/features/agent/store/chat-store"
 import { useListAvailableServices } from "@/features/agent/api/list-available-services"
 import { useModelCatalog } from "@/features/agent/api/use-model-catalog"
-import { agentResolveContext } from "@/features/agent/engine/services/context"
+import { agentResolveContext, isOnline } from "@/features/agent/engine/services/context"
 import { resolveAllServices, resolveService } from "@/features/agent/engine/services/resolve"
-import type { ServiceKind } from "@/features/agent/engine/services/kinds"
+import { isKeylessSearchEngine, type ServiceKind } from "@/features/agent/engine/services/kinds"
 
 
 type SectionId = "general" | "models" | "search" | "code" | "documents"
@@ -339,7 +339,8 @@ function SearchPane() {
 
   const managedAvailable = (id: SearchEngine): boolean =>
     signedIn && (managed.find((s) => s.name === id)?.available ?? false)
-  const usable = (id: SearchEngine): boolean => id === "parallel" || managedAvailable(id) || !!keys[id]
+  const usable = (id: SearchEngine): boolean =>
+    (isKeylessSearchEngine(id) && isOnline()) || managedAvailable(id) || !!keys[id]
 
   return (
     <div>
@@ -384,10 +385,10 @@ function SearchPane() {
         })}
       </div>
 
-      {engine === "parallel" ? (
+      {isKeylessSearchEngine(engine) ? (
         <p className="text-xs text-muted-foreground">
-          Free for light use, with rate limits. No search API key needed. Requires a reachable Dim0 backend;
-          model inference is configured separately.
+          Free for light use, with rate limits. No search API key and no sign-in needed — this device calls
+          Parallel directly, so it also works on a local board. Model inference is configured separately.
         </p>
       ) : (
         <>

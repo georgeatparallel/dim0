@@ -69,10 +69,24 @@ that idempotent under retries and parallel tool calls.
 
 ## Optional keyless search
 
-An explicit `parallel` search selection resolves to `keyless` before the existing
-BYOK/managed/off precedence. It uses `/ai/search` without a provider key or a
-managed quota charge, guarded by the relay's per-IP limit and Parallel's anonymous
-limits. Other services and search selections retain their existing precedence.
-The backend owns a dedicated anonymous Streamable HTTP MCP client. It does not
-reuse saved credentials or the shared keyed HTTP client. Desktop also uses the
-relay for this option; desktop-direct Parallel search is not implemented.
+A search engine in `KEYLESS_SEARCH_ENGINES` (today: `parallel`) needs no key from
+anyone, so an explicit selection of one resolves to **`keyless`** before the
+BYOK/managed/off precedence — but only while the network is reachable, so it
+falls to `off` offline like any other unreachable provider. Other services and
+search selections keep their existing precedence.
+
+- **Direct, not relayed (MUST):** `search.parallel.ai/mcp` sends
+  `Access-Control-Allow-Origin: *`, so a keyless engine is the one non-LLM
+  service the client calls **directly** — browser `fetch`, desktop plugin-http.
+  A local board therefore searches with zero calls to our backend.
+- **`/ai/search` is a fallback only:** used when the direct call cannot get
+  through. It charges no quota (there is no key of ours to spend), so on a
+  hosted deploy (`is_billing_active()`) it **requires a signed-in user** — a
+  per-IP window alone is forgeable through `X-Forwarded-For`, and relaying every
+  user's search from one IP would burn one shared anonymous allowance. A
+  self-hosted deploy keeps it open behind that per-IP window.
+- **Wire shape:** Streamable HTTP is JSON-RPC over POST, so one `tools/call` is
+  the whole exchange — no MCP SDK, no `initialize`, no session to delete, and
+  the same handful of lines on both sides. The request id is a throwaway: an
+  internal run id must never become an upstream session handle on a path whose
+  whole point is anonymity.

@@ -6,7 +6,7 @@
  * resolved (per request) to a `ServiceMode`:
  *   - "byok"    → call the provider directly with the USER's key,
  *   - "managed" → call our server proxy, which forwards with OUR keys (metered),
- *   - "keyless" → explicitly selected anonymous Parallel search via our relay,
+ *   - "keyless" → an explicitly selected provider that needs no key at all,
  *   - "off"     → unavailable (the corresponding tool is hidden).
  *
  * This module is pure types + constants — no React, no network — so the
@@ -20,6 +20,22 @@ export const SERVICE_KINDS: readonly ServiceKind[] = ["llm", "search", "code", "
 
 
 export type ServiceMode = "byok" | "managed" | "keyless" | "off"
+
+
+/**
+ * Search providers usable with no key from anyone — the user's or ours. The
+ * next one is an entry here plus its client in `parallel-search.ts`, not a new
+ * branch in the resolver.
+ */
+export const KEYLESS_SEARCH_ENGINES = ["parallel"] as const
+
+
+export type KeylessSearchEngine = (typeof KEYLESS_SEARCH_ENGINES)[number]
+
+
+/** Whether an engine id is one the agent can use without any key. */
+export const isKeylessSearchEngine = (engine: string | undefined): engine is KeylessSearchEngine =>
+  !!engine && (KEYLESS_SEARCH_ENGINES as readonly string[]).includes(engine)
 
 
 /**
@@ -41,7 +57,7 @@ export type PerKindByok = Partial<Record<ServiceKind, ByokCredential>>
 export type ServiceResolution =
   | { kind: ServiceKind; mode: "byok"; credential: ByokCredential }
   | { kind: ServiceKind; mode: "managed"; provider?: string; model?: string }
-  | { kind: "search"; mode: "keyless"; provider: "parallel" }
+  | { kind: "search"; mode: "keyless"; provider: KeylessSearchEngine }
   | { kind: ServiceKind; mode: "off" }
 
 
@@ -55,6 +71,12 @@ export type ResolveContext = {
   signedIn: boolean
   /** Explicit keyless search selection, independent of keys and sign-in. */
   searchEngine?: string
+  /**
+   * Whether the network a keyless engine needs is reachable. A keyless engine
+   * is called direct, so this is "are we online", not "is our server up".
+   * Omitted means unknown → treated as reachable (the resolver stays pure).
+   */
+  online?: boolean
   byok: PerKindByok
   managedAllowed?: (kind: ServiceKind) => boolean
   preferManaged?: boolean

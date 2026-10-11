@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import type { ByokConfig, ByokProvider } from "@/features/agent/engine/byok-client"
+import { isKeylessSearchEngine } from "@/features/agent/engine/services/kinds"
 
 
 const STORAGE_KEY = "dim0.byok"
@@ -7,6 +8,9 @@ const STORAGE_KEY = "dim0.byok"
 
 /** Web-search providers, including the explicitly selected keyless Parallel option. */
 export type SearchEngine = "perplexity" | "tavily" | "linkup" | "exa" | "parallel"
+
+
+const DEFAULT_SEARCH_ENGINE: SearchEngine = "perplexity"
 
 
 /** A model provider's own BYOK credential. */
@@ -38,7 +42,7 @@ const load = (): Stored | null => {
       searchKey?: string
     }
     const provider = p.provider ?? "openrouter"
-    const searchEngine = p.searchEngine ?? "perplexity"
+    const searchEngine = p.searchEngine ?? DEFAULT_SEARCH_ENGINE
     return {
       provider,
       llm: p.llm ?? (p.apiKey ? { [provider]: { apiKey: p.apiKey, model: p.model ?? "" } } : {}),
@@ -110,7 +114,7 @@ export const useByokStore = create<ByokState>((set, get) => ({
   provider: initial?.provider ?? "openrouter",
   llm: initial?.llm ?? {},
   configured: configuredFor(initial?.provider ?? "openrouter", initial?.llm ?? {}),
-  searchEngine: initial?.searchEngine ?? "perplexity",
+  searchEngine: initial?.searchEngine ?? DEFAULT_SEARCH_ENGINE,
   search: initial?.search ?? {},
   codeKey: initial?.codeKey ?? "",
   parseKey: initial?.parseKey ?? "",
@@ -147,7 +151,10 @@ export const useByokStore = create<ByokState>((set, get) => ({
   },
 
   clear: () => {
-    set({ llm: {}, configured: false, search: {}, codeKey: "", parseKey: "" })
+    // `searchEngine` goes back to the default too: leaving a keyless selection
+    // in memory would keep this session on it, then silently drop to the
+    // default after a reload once localStorage is gone.
+    set({ llm: {}, configured: false, searchEngine: DEFAULT_SEARCH_ENGINE, search: {}, codeKey: "", parseKey: "" })
     try {
       localStorage.removeItem(STORAGE_KEY)
     } catch {
@@ -164,7 +171,7 @@ export const useByokStore = create<ByokState>((set, get) => ({
 
   searchByok: () => {
     const { searchEngine, search } = get()
-    if (searchEngine === "parallel") return null
+    if (isKeylessSearchEngine(searchEngine)) return null
     const apiKey = search[searchEngine]
     return apiKey?.trim() ? { engine: searchEngine, apiKey: apiKey.trim() } : null
   },
@@ -186,7 +193,7 @@ const hasAnyKey = (s: ByokState): boolean =>
 function persist(get: () => ByokState): void {
   const { provider, llm, searchEngine, search, codeKey, parseKey } = get()
   try {
-    if (hasAnyKey(get()) || searchEngine === "parallel") {
+    if (hasAnyKey(get()) || isKeylessSearchEngine(searchEngine)) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ provider, llm, searchEngine, search, codeKey, parseKey }))
     } else {
       localStorage.removeItem(STORAGE_KEY)
