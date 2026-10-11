@@ -195,6 +195,15 @@ describe("explicit keyless Parallel search", () => {
   })
 
 
+  it("does not relay when Parallel itself refused, so the shared allowance is spent once", async () => {
+    direct.mockResolvedValue(new Response("rate limited", { status: 429 }))
+    const client = resolveSearchClient({ signedIn: false, engine: "parallel", online: true })!
+
+    await expect(client.search("asyncio")).rejects.toThrow(/429/)
+    expect(relay).not.toHaveBeenCalled()
+  })
+
+
   it("keeps the confirmation gate and reports a total failure to the agent", async () => {
     direct.mockRejectedValue(new TypeError("Failed to fetch"))
     relay.mockResolvedValue(new Response("Parallel rate limit", { status: 429 }))

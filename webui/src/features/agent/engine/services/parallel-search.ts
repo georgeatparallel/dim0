@@ -22,6 +22,14 @@ const PROTOCOL_VERSION = "2025-06-18"
 /** `fetch` keeps its window binding — calling a bare reference throws in the browser. */
 const browserFetch: FetchFn = (input, init) => fetch(input, init)
 
+
+/**
+ * The provider was reached and answered with a refusal (a status, or a tool
+ * error). Distinct from a transport failure so the caller knows retrying
+ * through our relay would only spend the same shared allowance again.
+ */
+export class KeylessUpstreamError extends Error {}
+
 type SearchResponse = { answer: string; results: SearchResult[] }
 type SearchPost = (body: { query: string; engine?: string }) => Promise<SearchResponse>
 
@@ -33,18 +41,18 @@ const toolPayload = (raw: string, contentType: string): { results?: ParallelSour
   const line = contentType.includes("text/event-stream")
     ? raw.split("\n").find((l) => l.startsWith("data:"))?.slice("data:".length).trim()
     : raw
-  if (!line) throw new Error("Parallel search returned an empty response")
+  if (!line) throw new KeylessUpstreamError("Parallel search returned an empty response")
   const body = JSON.parse(line) as {
     error?: { message?: string }
     result?: { content?: { type?: string; text?: string }[]; structuredContent?: unknown; isError?: boolean }
   }
-  if (body.error) throw new Error(`Parallel search failed: ${body.error.message ?? "unknown error"}`)
+  if (body.error) throw new KeylessUpstreamError(`Parallel search failed: ${body.error.message ?? "unknown error"}`)
   const result = body.result ?? {}
   const text = (result.content ?? [])
     .filter((c) => c.type === "text")
     .map((c) => c.text ?? "")
     .join("\n")
-  if (result.isError) throw new Error(`Parallel search failed: ${text || "unknown error"}`)
+  if (result.isError) throw new KeylessUpstreamError(`Parallel search failed: ${text || "unknown error"}`)
   return (result.structuredContent ?? JSON.parse(text)) as { results?: ParallelSource[] }
 }
 
@@ -81,7 +89,7 @@ export const parallelSearchPost =
         params: { name: "web_search", arguments: { objective: body.query, search_queries: [body.query] } },
       }),
     })
-    if (!res.ok) throw new Error(`Parallel search failed: ${res.status}`)
+    if (!res.ok) throw new KeylessUpstreamError(`Parallel search failed: ${res.status}`)
     const payload = toolPayload(await res.text(), res.headers.get("content-type") ?? "")
     const results = (payload.results ?? []).map(toResult).filter((r) => r.url)
     return { answer: "", results }

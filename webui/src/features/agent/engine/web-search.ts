@@ -20,7 +20,7 @@ import { resolveService } from "./services/resolve"
 import { isOverQuotaError, runIdHeaders } from "./services/run"
 import { servicesPost } from "./services/transport"
 import { desktopSearchPost } from "./services/desktop-search"
-import { keylessSearchPost } from "./services/parallel-search"
+import { keylessSearchPost, KeylessUpstreamError } from "./services/parallel-search"
 import { isOnline } from "./services/context"
 import { isTauri } from "@/platform"
 
@@ -64,7 +64,7 @@ export const managedSearchClient = (
 }
 
 
-/** Prefer the direct provider call, falling back to the relay if it fails. */
+/** Prefer the direct provider call; relay only when it can't be reached at all. */
 const keylessPost = (engine: string, runId?: string): SearchPost => {
   const direct = keylessSearchPost(engine)
   const relay = makeDefaultSearchPost(runId)
@@ -72,9 +72,12 @@ const keylessPost = (engine: string, runId?: string): SearchPost => {
   return async (body) => {
     try {
       return await direct(body)
-    } catch {
-      // Provider unreachable from this client (a blocked network, a stale
-      // webview). The relay is best-effort: let its own error surface.
+    } catch (e) {
+      // The provider answered and refused (a rate limit, say). Relaying the
+      // same query would only spend the same shared anonymous allowance.
+      if (e instanceof KeylessUpstreamError) throw e
+      // Unreachable from this client — a blocked network, a webview that
+      // can't do the cross-origin call. Let the relay's own error surface.
       return await relay(body)
     }
   }
