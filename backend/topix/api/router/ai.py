@@ -24,11 +24,11 @@ import litellm
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from topix.agents.assistant.auto_model import classify_auto_model_complexity
 from topix.agents.assistant.code import execute_code
-from topix.agents.websearch.parallel import search_parallel
+from topix.agents.websearch.parallel import UpstreamSearchError, search_parallel
 from topix.agents.websearch.tools import (
     fetch_content,
     search_exa,
@@ -36,6 +36,7 @@ from topix.agents.websearch.tools import (
     search_perplexity,
     search_tavily,
 )
+from topix.api.utils.billing.stripe_config import is_billing_active
 from topix.api.utils.decorators import with_standard_response
 from topix.api.utils.rate_limit.entitlements import resolve_entitlement_context
 from topix.api.utils.rate_limit.policy import resolve_allowed_model_tiers
@@ -50,6 +51,9 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 RUN_TTL_SECONDS = 3600
 # Light abuse guard for the unauthenticated BYOK relay (per client IP, per minute).
 BYOK_IP_PER_MINUTE = 120
+# Tighter guard for the keyless-search relay: it needs no key to call, and every
+# call spends a shared anonymous allowance upstream.
+KEYLESS_IP_PER_MINUTE = 30
 # Upload limits for /ai/parse (mirror the client's pre-checks in doc-attach.tsx).
 MAX_PDF_BYTES = 5 * 1024 * 1024
 MAX_PDF_PAGES = 50
@@ -386,11 +390,16 @@ _SEARCH_FNS = {
     "tavily": search_tavily,
     "linkup": search_linkup,
     "exa": search_exa,
+    "parallel": search_parallel,
 }
+
+# Engines that need no key at all — ours or the caller's. Adding the next one is
+# a single entry here plus its `_SEARCH_FNS` function.
+KEYLESS_SEARCH_ENGINES = frozenset({"parallel"})
 
 
 class AiSearchRequest(BaseModel):
-    """A web search query and engine; Parallel uses anonymous MCP."""
+    """A managed web search: a query + which engine (our keys, or none at all)."""
 
     query: str
     engine: str = "perplexity"
@@ -404,12 +413,26 @@ async def meter_search(
     x_run_id: Annotated[str | None, Header()] = None,
     x_provider_key: Annotated[str | None, Header()] = None,
 ) -> None:
-    """Guard keyless search by IP; retain existing metering for other engines."""
-    if body.engine == "parallel":
+    """Meter `/ai/search`, with a keyless-engine branch that charges no quota.
+
+    A keyless engine burns no key of ours, so there is nothing to charge — but
+    it does spend a shared anonymous allowance upstream. This relay is only the
+    fallback for clients that cannot reach the provider directly, so on a hosted
+    deploy (billing active) it requires a signed-in user: a per-IP window alone
+    is forgeable through `X-Forwarded-For`. A self-hosted deploy keeps it open,
+    guarded by the IP window. Other engines retain their existing metering.
+    """
+    if body.engine in KEYLESS_SEARCH_ENGINES:
+        if is_billing_active() and user_id is None:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         redis = getattr(request.app, "redis_store", None)
         if redis is not None:
             ok, _ = await redis.check_fixed_window_quota(
-                _client_ip(request), BYOK_IP_PER_MINUTE, "minute", scope="keyless_search"
+                _client_ip(request), KEYLESS_IP_PER_MINUTE, "minute", scope="keyless_search"
             )
             if not ok:
                 raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Slow down")
@@ -427,34 +450,39 @@ async def ai_search(
     user_id: Annotated[str | None, Depends(optional_user_uid)],
     _meter: Annotated[None, Depends(meter_search)],
     x_provider_key: Annotated[str | None, Header()] = None,
-    x_run_id: Annotated[str | None, Header()] = None,
 ):
     """Run one web search; returns `{answer, results}`.
 
     Uses our provider key by default, or relays the user's `X-Provider-Key`
-    (BYOK) for this call only — never stored. Parallel uses a dedicated
-    anonymous MCP connection and ignores provider keys.
+    (BYOK) for this call only — never stored. A keyless engine uses neither.
+    Upstream failures map to a status the client can act on (429/502/504) with a
+    generic message, never the provider's raw reply.
     """
-    if body.engine == "parallel":
-        if not body.query.strip() or body.max_results < 1:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Query and positive max_results are required")
-        try:
-            output = await search_parallel(body.query, max_results=body.max_results, session_id=x_run_id)
-        except httpx.HTTPStatusError as error:
-            code = error.response.status_code
-            retry_after = error.response.headers.get("Retry-After")
-            if retry_after:
-                response.headers["Retry-After"] = retry_after
-            raise HTTPException(code if code == 429 else 502, f"Parallel search failed (HTTP {code})") from error
-        except httpx.TimeoutException as error:
-            raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "Parallel search timed out") from error
-    else:
-        fn = _SEARCH_FNS.get(body.engine)
-        if fn is None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, f"Unsupported search engine '{body.engine}'"
-            )
-        output = await fn(body.query, max_results=body.max_results, api_key=x_provider_key)
+    fn = _SEARCH_FNS.get(body.engine)
+    if fn is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"Unsupported search engine '{body.engine}'"
+        )
+    key = None if body.engine in KEYLESS_SEARCH_ENGINES else x_provider_key
+    try:
+        output = await fn(body.query, max_results=body.max_results, api_key=key)
+    except httpx.TimeoutException as error:
+        raise HTTPException(
+            status.HTTP_504_GATEWAY_TIMEOUT, f"'{body.engine}' search timed out"
+        ) from error
+    except httpx.HTTPStatusError as error:
+        code = error.response.status_code
+        retry_after = error.response.headers.get("Retry-After")
+        if retry_after:
+            response.headers["Retry-After"] = retry_after
+        raise HTTPException(
+            code if code == status.HTTP_429_TOO_MANY_REQUESTS else status.HTTP_502_BAD_GATEWAY,
+            f"'{body.engine}' search failed upstream",
+        ) from error
+    except (httpx.HTTPError, UpstreamSearchError, ValidationError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"'{body.engine}' search failed upstream"
+        ) from error
     return {
         "answer": output.answer,
         "results": [

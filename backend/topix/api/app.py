@@ -11,6 +11,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from topix.agents.websearch.parallel import close_client as close_parallel_client
 from topix.api.router import (
     ai,
     billing,
@@ -115,6 +116,8 @@ def create_app(stage: StageEnum):
         await app.mini_app_state_store.close()
         await app.subscription_store.close()
         await app.collab_oplog.close()
+        # Shared anonymous client for keyless search (module-level, not on app).
+        await close_parallel_client()
         # Close Redis
         await app.redis_store.close()
         await app.pg_pool.close()
