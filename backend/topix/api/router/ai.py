@@ -53,7 +53,7 @@ RUN_TTL_SECONDS = 3600
 BYOK_IP_PER_MINUTE = 120
 # Tighter guard for the keyless-search relay: it needs no key to call, and every
 # call spends a shared anonymous allowance upstream.
-KEYLESS_IP_PER_MINUTE = 30
+KEYLESS_CALLER_PER_MINUTE = 30
 # Upload limits for /ai/parse (mirror the client's pre-checks in doc-attach.tsx).
 MAX_PDF_BYTES = 5 * 1024 * 1024
 MAX_PDF_PAGES = 50
@@ -420,7 +420,8 @@ async def meter_search(
     fallback for clients that cannot reach the provider directly, so on a hosted
     deploy (billing active) it requires a signed-in user: a per-IP window alone
     is forgeable through `X-Forwarded-For`. A self-hosted deploy keeps it open,
-    guarded by the IP window. Other engines retain their existing metering.
+    guarded by that window — keyed on the uid when signed in, on the client IP
+    otherwise. Other engines retain their existing metering.
     """
     if body.engine in KEYLESS_SEARCH_ENGINES:
         if is_billing_active() and user_id is None:
@@ -431,8 +432,13 @@ async def meter_search(
             )
         redis = getattr(request.app, "redis_store", None)
         if redis is not None:
+            # Window on the uid whenever we have one: `X-Forwarded-For` is
+            # caller-supplied, so keying a signed-in caller by IP lets them
+            # rotate the hop and reset the window. A signed-out self-host has
+            # no identity to key on, so the IP is all there is.
+            window_key = f"user:{user_id}" if user_id else f"ip:{_client_ip(request)}"
             ok, _ = await redis.check_fixed_window_quota(
-                _client_ip(request), KEYLESS_IP_PER_MINUTE, "minute", scope="keyless_search"
+                window_key, KEYLESS_CALLER_PER_MINUTE, "minute", scope="keyless_search"
             )
             if not ok:
                 raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Slow down")

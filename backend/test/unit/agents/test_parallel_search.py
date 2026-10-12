@@ -15,7 +15,7 @@ from fastapi import FastAPI
 
 from topix.agents.websearch import parallel
 from topix.agents.websearch.parallel import UpstreamSearchError, search_parallel
-from topix.api.router.ai import router
+from topix.api.router.ai import optional_user_uid, router
 
 SOURCE = {
     "url": "https://docs.python.org/3/library/asyncio.html",
@@ -179,14 +179,28 @@ async def test_failures_never_look_like_an_empty_result(mcp_endpoint, scenario, 
         await search_parallel("q")
 
 
-def _app() -> FastAPI:
-    """Build a bare app with the AI router and a permissive quota store."""
+def _app(uid: str | None = None) -> FastAPI:
+    """Build a bare app with the AI router and a permissive quota store.
+
+    `uid` stands in for a validated bearer token; None leaves the caller signed
+    out, as a self-hosted relay call is.
+    """
     app = FastAPI()
     app.include_router(router)
     redis = AsyncMock()
     redis.check_fixed_window_quota.return_value = (True, 1)
     app.redis_store = redis
+
+    async def _uid() -> str | None:
+        return uid
+
+    app.dependency_overrides[optional_user_uid] = _uid
     return app
+
+
+def _window_keys(app: FastAPI) -> list[str]:
+    """Return the key each keyless-relay window check was counted against."""
+    return [call.args[0] for call in app.redis_store.check_fixed_window_quota.await_args_list]
 
 
 @pytest.mark.asyncio
@@ -228,6 +242,37 @@ async def test_keyed_engines_keep_their_existing_metering(mcp_endpoint):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(_app()), base_url="http://dim0") as caller:
         response = await caller.post("/ai/search", json={"query": "same default"})
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_relay_windows_a_signed_in_caller_on_the_user_id(mcp_endpoint, monkeypatch):
+    """`X-Forwarded-For` is caller-supplied: rotating it must not reset the window."""
+    monkeypatch.setattr("topix.api.router.ai.is_billing_active", lambda: True)
+    app = _app(uid="user-1")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://dim0") as caller:
+        for hop in ("203.0.113.1", "198.51.100.7"):
+            response = await caller.post(
+                "/ai/search",
+                json={"query": "q", "engine": "parallel"},
+                headers={"X-Forwarded-For": hop},
+            )
+            assert response.status_code == 200
+    assert _window_keys(app) == ["user:user-1", "user:user-1"]
+
+
+@pytest.mark.asyncio
+async def test_relay_windows_a_signed_out_caller_on_the_ip(mcp_endpoint, monkeypatch):
+    """Signed out on a self-host there is no uid, so the first forwarded hop is it."""
+    monkeypatch.setattr("topix.api.router.ai.is_billing_active", lambda: False)
+    app = _app()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://dim0") as caller:
+        response = await caller.post(
+            "/ai/search",
+            json={"query": "q", "engine": "parallel"},
+            headers={"X-Forwarded-For": "203.0.113.9, 10.0.0.1"},
+        )
+    assert response.status_code == 200
+    assert _window_keys(app) == ["ip:203.0.113.9"]
 
 
 @pytest.mark.asyncio
